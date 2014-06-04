@@ -6,7 +6,6 @@ import docker
 import multiprocessing.dummy as multiprocessing
 import re
 import six
-import sys
 
 from . import exceptions
 from . import lifecycle
@@ -224,7 +223,6 @@ class Container(Entity):
         self.ports = self._parse_ports(config.get('ports', {}))
 
         # Parse the DNS setting
-        sys.stdout.write('DNS: ' + config.get('dns', None) + "\n")
         self.dns = config.get('dns', None)
 
         # Get environment variables.

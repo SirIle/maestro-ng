@@ -12,4 +12,4 @@ services:
         ports: {ssh: '22:1000', elasticsearch:  9200, kibana: 80 , consul: 8500}
         lifecycle:
           running: [{type: tcp, port: consul}]
-        dns: 'localhost'
+        dns: localhost
