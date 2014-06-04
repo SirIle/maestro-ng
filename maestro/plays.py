@@ -313,10 +313,14 @@ class Start(BaseOrchestrationPlay):
             for port in container.ports.values():
                 ports[port['exposed']].append(
                     (port['external'][0], port['external'][1].split('/')[0]))
+
+        sys.stdout.write('Setting DNS: ' + container.dns + "\n")
+
         container.ship.backend.start(container.id,
                                      binds=container.volumes,
                                      port_bindings=ports,
-                                     privileged=container.privileged)
+                                     privileged=container.privileged,
+                                     dns=container.dns)
 
         # Waiting one second and checking container state again to make sure
         # initialization didn't fail.

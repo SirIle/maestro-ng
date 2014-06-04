@@ -6,6 +6,7 @@ import docker
 import multiprocessing.dummy as multiprocessing
 import re
 import six
+import sys
 
 from . import exceptions
 from . import lifecycle
@@ -34,7 +35,7 @@ class Ship(Entity):
     """
 
     DEFAULT_DOCKER_PORT = 4243
-    DEFAULT_DOCKER_VERSION = '1.8'
+    DEFAULT_DOCKER_VERSION = '1.11'
     DEFAULT_DOCKER_TIMEOUT = 5
 
     def __init__(self, name, ip, docker_port=DEFAULT_DOCKER_PORT,
@@ -222,6 +223,10 @@ class Container(Entity):
         # Parse the port specs.
         self.ports = self._parse_ports(config.get('ports', {}))
 
+        # Parse the DNS setting
+        sys.stdout.write('DNS: ' + config.get('dns', None) + "\n")
+        self.dns = config.get('dns', None)
+
         # Get environment variables.
         self.env = dict(service.env)
         self.env.update(config.get('env', {}))
@@ -293,7 +298,7 @@ class Container(Entity):
         if refresh or not self._status:
             try:
                 self._status = self.ship.backend.inspect_container(self.name)
-            except docker.client.APIError:
+            except docker.errors.APIError:
                 pass
 
         return self._status
