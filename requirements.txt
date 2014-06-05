@@ -1,4 +1,4 @@
-docker-py>=0.3.2
+git+git://github.com/dotcloud/docker-py
 pyyaml
 jinja2
 six
