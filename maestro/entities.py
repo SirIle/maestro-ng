@@ -243,6 +243,11 @@ class Container(Entity):
             (src or dst, dst) for dst, src in
             config.get('volumes', {}).items())
 
+        # Parse links
+        self.links = dict(
+            (src or dst, dst) for dst, src in
+            config.get('links', {}).items())
+
         # Should this container run with -privileged?
         self.privileged = config.get('privileged', False)
 

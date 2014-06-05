@@ -317,6 +317,7 @@ class Start(BaseOrchestrationPlay):
         container.ship.backend.start(container.id,
                                      binds=container.volumes,
                                      port_bindings=ports,
+                                     links=container.links,
                                      privileged=container.privileged,
                                      dns=container.dns)
 

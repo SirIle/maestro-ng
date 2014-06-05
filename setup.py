@@ -38,5 +38,5 @@ setup(
     author_email='max@signalfuse.com',
     license='GNU Lesser General Public License v3',
     keywords='maestro docker orchestration deployment',
-    url='http://github.com/signalfuse/maestro-ng',
+    url='http://github.com/sirile/maestro-ng',
 )
