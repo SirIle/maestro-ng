@@ -9,19 +9,21 @@ services:
     instances:
       core:
         ship: vagrant-docker
-        ports: {ssh: '22:1000', elasticsearch:  9200, kibana: 80 , consul: 8500}
+        ports: {ssh: '22:1000', elasticsearch:  9200, kibana: 80 , consului: 8500}
         lifecycle:
-          running: [{type: tcp, port: consul}]
+          running: [{type: tcp, port: consului}]
         dns: localhost
-  bare:
+  cassandra:
     image: test/cassandra
     requires: [core]
     instances:
       cassandra1:
         ship: vagrant-docker
-        ports: {ssh: '22:1021'}
+        ports: {ssh: '22:1021', cassandra: 9160}
         links:
             core: core
+        lifecycle:
+          running: [{type: tcp, port: cassandra}]
         dns: localhost
       cassandra2:
         ship: vagrant-docker
