@@ -126,7 +126,7 @@ class Status(BaseOrchestrationPlay):
             o.pending('Gathering container information from {} ({})...'.format(
                 ship.name, ship.ip))
             try:
-                status.update(dict((c['Names'][-1][1:], c)
+                status.update(dict((c['Names'][0][c['Names'][0].rindex('/') + 1:], c)
                               for c in ship.backend.containers()))
             except:
                 pass
