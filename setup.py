@@ -19,7 +19,7 @@ setup(
     long_description=long_description,
     zip_safe=True,
     packages=find_packages(),
-    install_requires=['docker-py==0.3.2-dev', 'pyyaml', 'jinja2'],
+    install_requires=['docker-py==0.3.2', 'pyyaml', 'jinja2'],
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Environment :: Console',
