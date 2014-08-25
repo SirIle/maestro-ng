@@ -23,7 +23,7 @@ class TCPPortPinger(BaseLifecycleHelper):
     Lifecycle state helper that "pings" a particular TCP port.
     """
 
-    DEFAULT_MAX_WAIT = 60
+    DEFAULT_MAX_WAIT = 300
 
     def __init__(self, host, port, attempts=1):
         """Create a new TCP port pinger for the given host and port. The given
@@ -95,11 +95,35 @@ class ScriptExecutor(BaseLifecycleHelper):
         return ScriptExecutor(config['command'])
 
 
+class Sleep(BaseLifecycleHelper):
+    """
+    Lifecycle state helper that simply sleeps for a given amount of time (in
+    seconds).
+    """
+
+    def __init__(self, wait):
+        self.wait = wait
+
+    def __repr__(self):
+        return 'Sleep({}s)'.format(self.wait)
+
+    def test(self):
+        while self.wait > 0:
+            time.sleep(1)
+            self.wait -= 1
+        return True
+
+    @staticmethod
+    def from_config(container, config):
+        return Sleep(config['wait'])
+
+
 class LifecycleHelperFactory:
 
     HELPERS = {
         'tcp': TCPPortPinger,
         'exec': ScriptExecutor,
+        'sleep': Sleep,
     }
 
     @staticmethod

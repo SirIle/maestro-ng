@@ -19,8 +19,6 @@ complex, multi-host environments using Docker containers possible and
 easy to use. Maestro of course supports declared dependencies between
 services and makes sure to honor those during environment bring up.
 
-**[See a demo](http://showterm.io/c275984679f8f148b6403)**
-
 What is Maestro?
 ----------------
 
@@ -115,13 +113,22 @@ registries:
 The _ships_ are simple to define. They are named (but that name doesn't
 need to match their DNS resolvable host name), and need an `ip`
 address/hostname. If the Docker daemon doesn't listen its default port
-of 4243, the `docker_port` can be overriden:
+of 2375, the `docker_port` can be overriden. You can also use an SSH
+tunnel to secure the communication with the target Docker daemon
+(especially if you don't want to Docker daemon to listen on anything
+else than localhost, and rely on SSH key-based authentication instead).
 
 ```yaml
 ships:
-  vm1.ore1:   {ip: c414.ore1.domain.com}
-  vm2.ore2:   {ip: c415.ore1.domain.com, docker_port: 4244}
-  controller: {ip: 42.42.42.1}
+  vm1.ore1: {ip: c414.ore1.domain.com}
+  vm2.ore2: {ip: c415.ore2.domain.com, docker_port: 4243}
+  vm3.ore3:
+    ip: c416.ore3.domain.com
+    docker_port: 4243
+    ssh_tunnel:
+      user: ops
+      key: {{ env.HOME }}/.ssh/id_dsa
+      port: 22 # That's the default
 ```
 
 Services are also named. Their name is used for commands that act on
@@ -134,18 +141,27 @@ of that service's instances.
 Each service instance must at least define the _ship_ its container will
 be placed on (by name). Additionally, it may define:
 
-  - port mappings, as a map of `<port name>: <port or port mapping
-    spec>` (see below for port spec syntax);
-  - lifecycle state checks, which Maestro uses to confirm a service
-    correctly started (see Lifecycle checks below);
-  - volume mappings, as a map of `<destination in container>: <source from host>`;
-  - environment variables, as a map of `<variable name>: <value>`;
-  - whether the container should run in privileged mode, as a boolean
-  `privileged: true | false` (Defaults to false);
-  - stop timeout: number of seconds to try to stop for before
-    killing the container (default is 10);
-  - memory limit;
-  - cpu shares (relative weight).
+  - `ports`, a dictionary of port mappings, as a map of `<port name>:
+    <port or port mapping spec>` (see below for port spec syntax);
+  - `lifecycle`, for lifecycle state checks, which Maestro uses to
+    confirm a service correctly started or stopped (see Lifecycle checks
+    below);
+  - `volume`, for container volume mappings, as a map of `<destination
+    in container>: <source from host>`;
+  - `env`, for environment variables, as a map of `<variable name>:
+    <value>` (variables defined at the instance level override variables
+    defined at the service level);
+  - `privileged`, a boolean specifying whether the container should run
+    in privileged mode or not (defaults to `false`);
+  - `stop_timeout`, the number of seconds Docker will wait between
+    sending `SIGTERM` and `SIGKILL` (defaults to 10);
+  - `limits`:
+    - `memory`, the memory limit of the container (`k`, `m` and `g`
+      limits accepted, also valid in uppercase);
+    - `cpu`, the number of CPU shares (relative weight) allocated to the
+      container;
+  - `command`, to specify or override the command executed by the
+    container.
 
 ```yaml
 services:
@@ -492,6 +508,31 @@ available in its `maestro.guestutils` module. The recommended (or
 easiest) way to build this startup script is to write it in Python, and
 have the Maestro package installed in your container.
 
+Links
+-----
+
+Maestro also supports defining links to link same-host containers
+together via Docker's Links feature. Read more about [Docker
+Links](http://docs.docker.io/en/latest/use/working_with_links_names/) to
+learn more. Note that the format of the environment variables is not the
+same as the ones Maestro inserts into the container's environment, so
+software running inside the containers needs to deal with that on its
+own.
+
+Defining links is done through the instance-level `links` section, with
+each link defined as a child in the format `name: alias`:
+
+```yaml
+services:
+  myservice:
+    image: ...
+    instances:
+      myservice-1:
+        # ...
+        links:
+          mongodb01: db
+```
+
 Guest utils helper functions
 ----------------------------
 
@@ -628,66 +669,111 @@ Usage
 =====
 
 Once installed, Maestro is available both as a library through the
-`maestro` package and as an executable. Note that if you didn't install
-Maestro system-wide, you can still run it with the same commands as long
-as your `PYTHONPATH` contains the path to your `maestro-ng` repository
-clone. To run Maestro, simply execute the main Python package:
+`maestro` package and as an executable. To run Maestro, simply execute
+`maestro`. Note that if you didn't install Maestro system-wide, you can
+still run it with the same commands as long as your `PYTHONPATH`
+contains the path to your `maestro-ng` repository clone and using
+`python -m maestro ...`.
 
 ```
-$ python -m maestro -h
-usage: maestro [-h] [-f [FILE]] [-c CMD] [-r] [-F] [-n LINES] [-o]
-               [{status,fullstatus,start,stop,clean,logs}] [thing [thing ...]]
+$ maestro -h
+usage: maestro [-h] [-f FILE] [-v]
+               {status,start,stop,restart,logs,deptree} ...
 
-Docker container orchestrator.
+Maestro, Docker container orchestrator.
 
 positional arguments:
-  {status,fullstatus,start,stop,clean,logs}
-                        orchestration command to execute
-  thing                 container(s) or service(s) to act on
+  {status,start,stop,restart,logs,deptree}
+    status              display container status
+    start               start services and containers
+    stop                stop services and containers
+    restart             restart services and containers
+    logs                show logs from a container
+    deptree             show the dependency tree
+    complete            shell auto-completion helper
 
 optional arguments:
   -h, --help            show this help message and exit
-  -f [FILE], --file [FILE]
-                        read environment description from FILE (use - for
-                        stdin)
-  -c CMD, --completion CMD
-                        list commands, services or containers in environment
-                        based on CMD
+  -f FILE, --file FILE  read environment description from FILE (use - for
+                        stdin, defaults to ./maestro.yaml)
+  -v, --version         show program version and exit
+```
+
+You can then get help on each individual command with:
+
+```
+$ maestro start -h
+usage: maestro start [-h] [-c LIMIT] [-d] [-i] [-r] [thing [thing ...]]
+
+Start services and containers
+
+positional arguments:
+  thing                 container(s) or service(s) to display
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -c LIMIT, --concurrency LIMIT
+                        limit how many containers can be acted on at the same
+                        time to LIMIT
+  -d, --with-dependencies
+                        include dependencies
+  -i, --ignore-dependencies
+                        ignore dependency order
   -r, --refresh-images  force refresh of container images from registry
-  -F, --follow          follow logs as they are generated
-  -n LINES              Only show the last LINES lines for logs
-  -o, --only            only affect the selected container or service
 ```
 
-By default, Maestro will read the environment description from the
-standard input so if you run Maestro without arguments it will appear to
-not do anything and just be "stuck". You can also use the `-f` flag to
-specify the path to the environment file. The two following commands are
-identical:
+By default, Maestro will read the environment description configuration
+from the `maestro.yaml` file in the current directory. You can override
+this with the `-f` flag to specify the path to the environment
+configuration file. Additionally, you can use `-` to read the
+configuration from `stdin`. The following commands are identical:
 
 ```
-$ python -m maestro < demo.yaml
-$ python -m maestro -f demo.yaml
+$ maestro status
+$ maestro -f maestro.yaml status
+$ maestro -f - status < maestro.yaml
 ```
 
 The first positional argument is a command you want Maestro to execute.
-The available commands are `status`, `fullstatus`, `start`, `stop` and
-`logs`. They should all be self-explanatory. Service dependency is
-always honored for all commands. Note that if services don't have any
-dependencies (or have the same dependencies), their start order might
-not always be the same.
+The available commands are `status`, `start`, `stop`, `restart`, `logs`
+and `deptree`. They should all be self-explanatory.
 
-You can also pass one or more service names or container names on which
-to execute the command, to restrict the action of the command to just
-these services or containers (or any combination of both).  Note that
-Maestro will do its best to examine the state of the system and not
-perform any action unless it's really necessary.
+Most commands operate on one or more "things", which can be services or
+instances, by name. When passing service names, Maestro will
+automatically expand those to their corresponding list of instances. The
+`logs` command is the only one that operates on strictly one container
+instance.
 
-You can force Maestro to operate only on the containers and services
-that were explicitely given on the command-line by using the `-o` flag.
+Impact of defined dependencies on orchestration order
+-----------------------------------------------------
 
-Finally, if started without any arguments, default to the `status`
-command on all containers, thus showing the state of the environment.
+One of the main features of Maestro is its understand of dependencies
+between services. When Maestro carries out an orchestration action,
+dependencies are always considered unless the `-i |
+--ignore-dependencies` flag is passed.
+
+**But Maestro will only respect the dependencies to other services and
+containers that the current orchestration action includes.** If you want
+Maestro to automatically include the dependencies of the services or
+containers you want to act on in the orchestration that will be carried
+out, you must pass the `-d | --with-dependencies` flag!
+
+For example, assuming we have two services, ZooKeeper (`zookeeper`) and
+Kafka (`kafka`). Kafka depends on ZooKeeper:
+
+```
+# Starts Kafka and only Kafka:
+$ maestro start kafka
+
+# Starts ZooKeeper, then Kafka:
+$ maestro start -d kafka
+# Which is equivalent to:
+$ maestro start kafka zookeeper
+
+# Starts ZooKeeper and Kafka at the same time (includes dependencies but
+# ignores dependency order constraints):
+$ maestro start -d -i kafka
+```
 
 Examples of Docker images with Maestro orchestration
 ====================================================

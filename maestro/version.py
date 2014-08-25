@@ -1,2 +1,2 @@
-name = 'maestro-ile'
-version = '0.1.8'
+name = 'maestro'
+version = '0.2.2'

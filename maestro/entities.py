@@ -2,10 +2,27 @@
 #
 # Docker container orchestration utility.
 
+import bgtunnel
+import datetime
+
+# Import _strptime manually to work around a thread safety issue when using
+# strptime() from threads for the first time.
+import _strptime # flake8: noqa
+
 import docker
-import multiprocessing.dummy as multiprocessing
+try:
+    from docker.errors import APIError
+except ImportError:
+    # Fall back to <= 0.3.1 location
+    from docker.client import APIError
+
+import multiprocessing.pool
 import re
 import six
+
+# For Python bug workaround
+import threading
+import weakref
 
 from . import exceptions
 from . import lifecycle
@@ -38,22 +55,43 @@ class Ship(Entity):
     DEFAULT_DOCKER_TIMEOUT = 5
 
     def __init__(self, name, ip, docker_port=DEFAULT_DOCKER_PORT,
-                 timeout=None, docker_endpoint=None):
+                 timeout=None, ssh_tunnel=None):
         """Instantiate a new ship.
 
         Args:
             name (string): the name of the ship.
             ip (string): the IP address of resolvable host name of the host.
             docker_port (int): the port the Docker daemon listens on.
-            docker_endpoint (url): endpoint to access the docker api
+            ssh_tunnel (dict): configuration for SSH tunneling to the remote
+                Docker daemon.
         """
         Entity.__init__(self, name)
         self._ip = ip
         self._docker_port = docker_port
-        if docker_endpoint:
-            self._backend_url = docker_endpoint
+        self._tunnel = None
+
+        if ssh_tunnel:
+            if 'user' not in ssh_tunnel:
+                raise exceptions.EnvironmentConfigurationException(
+                    'Missing SSH user for ship {} tunnel configuration'.format(
+                        self.name))
+            if 'key' not in ssh_tunnel:
+                raise exceptions.EnvironmentConfigurationException(
+                    'Missing SSH key for ship {} tunnel configuration'.format(
+                        self.name))
+
+            self._tunnel = bgtunnel.open(
+                ssh_address=ip,
+                ssh_user=ssh_tunnel['user'],
+                ssh_port=int(ssh_tunnel.get('port', 22)),
+                host_port=docker_port,
+                silent=True,
+                identity_file=ssh_tunnel['key'])
+            self._backend_url = 'http://localhost:{}'.format(
+                self._tunnel.bind_port)
         else:
             self._backend_url = 'http://{:s}:{:d}'.format(ip, docker_port)
+
         self._backend = docker.Client(
             base_url=self._backend_url,
             version=Ship.DEFAULT_DOCKER_VERSION,
@@ -71,12 +109,18 @@ class Ship(Entity):
         return self._backend
 
     @property
-    def docker_endpoint(self):
-        """Returns the Docker daemon endpoint location on that ship."""
-        return 'tcp://%s:%d' % (self._ip, self._docker_port)
+    def address(self):
+        if self._tunnel:
+            return '{} (ssh:{})'.format(self.name, self._tunnel.bind_port)
+        return self.name
 
     def __repr__(self):
-        return '<ship:%s [%s:%d]>' % (self.name, self._ip, self._docker_port)
+        if self._tunnel:
+            return '<ship:{} ssh://{}@{}:{}->{}>'.format(
+                self.name, self._tunnel.ssh_user, self._ip,
+                self._tunnel.bind_port, self._docker_port)
+        return '<ship:{} http://{}:{}>'.format(
+            self.name, self._ip, self._docker_port)
 
 
 class Service(Entity):
@@ -129,6 +173,10 @@ class Service(Entity):
             p[0] = self._image
             p.pop()
         return {'repository': p[0], 'tag': len(p) > 1 and p[1] or 'latest'}
+
+    @property
+    def dependencies(self):
+        return self._requires
 
     @property
     def requires(self):
@@ -217,7 +265,8 @@ class Container(Entity):
         self._service.register_container(self)
 
         # Get command
-        self.cmd = config.get('cmd', None)
+        # TODO(mpetazzoni): remove deprecated 'cmd' support
+        self.command = config.get('command', config.get('cmd'))
 
         # Parse the port specs.
         self.ports = self._parse_ports(config.get('ports', {}))
@@ -243,9 +292,9 @@ class Container(Entity):
             (src or dst, dst) for dst, src in
             config.get('volumes', {}).items())
 
-        # Parse links
+        # Get links
         self.links = dict(
-            (src or dst, dst) for dst, src in
+            (name, alias) for name, alias in
             config.get('links', {}).items())
 
         # Should this container run with -privileged?
@@ -293,7 +342,42 @@ class Container(Entity):
         """Returns the ID of this container given by the Docker daemon, or None
         if the container doesn't exist."""
         status = self.status()
-        return status and status['ID'] or None
+        return status and status.get('ID', status.get('Id', None))
+
+    def _parse_go_time(self, s):
+        """Parse a time string found in the container status into a Python
+        datetime object.
+
+        Docker uses Go's Time.String() method to convert a UTC timestamp into a
+        string, but that representation isn't directly parsable from Python as
+        it includes nanoseconds: http://golang.org/pkg/time/#Time.String
+
+        We don't really care about sub-second precision here anyway, so we
+        strip it out and parse the datetime up to the second.
+
+        Args:
+            s (string): the time string from the container inspection
+                dictionary.
+        Returns: The corresponding Python datetime.datetime object, or None if
+            the time string clearly represented a non-initialized time (which
+            seems to be 0001-01-01T00:00:00Z in Go).
+        """
+        if not s:
+            return None
+        t = datetime.datetime.strptime(s.split('.')[0], '%Y-%m-%dT%H:%M:%S')
+        return t if t.year > 1 else None
+
+    @property
+    def started_at(self):
+        """Returns the time at which the container was started."""
+        status = self.status()
+        return status and self._parse_go_time(status['State']['StartedAt'])
+
+    @property
+    def finished_at(self):
+        """Returns the time at which the container finished executing."""
+        status = self.status()
+        return status and self._parse_go_time(status['State']['FinishedAt'])
 
     def status(self, refresh=False):
         """Retrieve the details about this container from the Docker daemon, or
@@ -301,7 +385,7 @@ class Container(Entity):
         if refresh or not self._status:
             try:
                 self._status = self.ship.backend.inspect_container(self.name)
-            except docker.errors.APIError:
+            except APIError:
                 pass
 
         return self._status
@@ -329,7 +413,7 @@ class Container(Entity):
                     port_number(spec['exposed'])
         return links
 
-    def check_for_state(self, state):
+    def start_lifecycle_checks(self, state):
         """Check if a particular lifecycle state has been reached by executing
         all its defined checks. If not checks are defined, it is assumed the
         state is reached immediately."""
@@ -338,10 +422,15 @@ class Container(Entity):
             # Return None to indicate no checks were performed.
             return None
 
-        pool = multiprocessing.Pool(len(self._lifecycle[state]))
-        return reduce(lambda x, y: x and y,
-                      pool.map(lambda check: check.test(),
-                               self._lifecycle[state]))
+        # HACK: Workaround for Python bug #10015 (also #14881). Fixed in
+        # Python >= 2.7.5 and >= 3.3.2.
+        thread = threading.current_thread()
+        if not hasattr(thread, "_children"):
+            thread._children = weakref.WeakKeyDictionary()
+
+        pool = multiprocessing.pool.ThreadPool()
+        return pool.map_async(lambda check: check.test(),
+                              self._lifecycle[state])
 
     def ping_port(self, port):
         """Ping a single port, by its given name in the port mappings. Returns
